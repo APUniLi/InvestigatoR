@@ -17,7 +17,7 @@
 #' @importFrom cli cli_alert_danger
 #'
 #' @export
-retpred_map <- function(t, data_subset, indices, model_function, model_config){
+retpred_map <- function(t, data_subset, indices, mask, model_function, model_config){
   # Input Validation using checkmate
   checkmate::assert_numeric(t, lower = 1, upper = nrow(indices), len = 1, .var.name = "t")
   checkmate::assert_string(model_function, .var.name = "model_function")
