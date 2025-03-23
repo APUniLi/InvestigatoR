@@ -296,7 +296,7 @@ backtesting_returns <- function(data, return_prediction_object = NULL, return_la
       back_test <- furrr::future_map_dfr(
         map_indices,
         ~ {
-          result <- retpred_map(.x, data_subset, indices, model_function, model_config)
+          result <- retpred_map(.x, data_subset, indices, mask, model_function, model_config)
           if (verbose) {
             cli::cli_progress_update(id = pb)
           }
