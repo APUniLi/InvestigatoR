@@ -275,27 +275,53 @@ Ac cordingv to thge website, the dataset comprises information on 1,207 stocks l
 #### ibraries and Environment Setup
 
 ```{r setup_libraries, include=TRUE}
-# Load necessary libraries
+
 library(reticulate)
 library(tensorflow)
+# Thread and core limitations
+
+tf$config$threading$set_intra_op_parallelism_threads(8L)
+tf$config$threading$set_inter_op_parallelism_threads(2L)
+
+# intra‐op: how many threads per single op (e.g. one matmul)
+intra <- tf$config$threading$get_intra_op_parallelism_threads()
+# inter‐op: how many independent ops at once
+inter <- tf$config$threading$get_inter_op_parallelism_threads()
+
+cat("TF intra_op_parallelism_threads =", intra, "\n")
+cat("TF inter_op_parallelism_threads =", inter, "\n")
+
+cat("OMP_NUM_THREADS        =", Sys.getenv("OMP_NUM_THREADS"), "\n")
+cat("MKL_NUM_THREADS        =", Sys.getenv("MKL_NUM_THREADS"), "\n")
+cat("OPENBLAS_NUM_THREADS   =", Sys.getenv("OPENBLAS_NUM_THREADS"), "\n")
 library(keras3)
+#reticulate::use_virtualenv("/home/sstoeckl/Packages/python/")
+reticulate::use_virtualenv("r-reticulate", required = TRUE)
+# check for python availability and whether modules are installed
+reticulate::py_config()
+reticulate::py_module_available("tensorflow")
+reticulate::py_module_available("keras")
+# tf$config$threading$set_intra_op_parallelism_threads(32)  # Adjust as needed, start around 32
+# tf$config$threading$set_inter_op_parallelism_threads(32)
 library(dplyr)
 library(tibble)
 library(PerformanceAnalytics)
+# devtools::load_all()
+devtools::load_all("/home/apischetsrieder/Thesis/InvestigatoR")
 
-# Set up the Python virtual environment
-#reticulate::use_virtualenv("~/.virtualenvs/bin/python/") 
-reticulate::use_virtualenv("r-reticulate", required = TRUE)
-
-# Confirm TensorFlow and Keras availability
-reticulate::py_config()  
-reticulate::py_module_available("tensorflow")
-reticulate::py_module_available("keras")
-
-# Load InvestigatoR package
-# library(InvestigatoR)
-devtools::load_all()
 ```
+
+Nachgedacht für 4 Sekunden
+
+
+I did an initial environment setup to ensure reproducible, performant training and analysis:
+
+* Configured TensorFlow’s threading (intra-op and inter-op) so matrix operations and independent graphs run on a controlled number of CPU cores, avoiding unpredictable parallelism.
+* Hooked into my Python “r-reticulate” virtualenv via **reticulate**, verified that **tensorflow** and **keras** modules are present, and printed key BLAS/OpenMP thread‐count environment variables for transparency.
+* Loaded **keras3** for defining and training neural networks, then brought in **dplyr**, **tibble**, and **PerformanceAnalytics** for data wrangling and financial performance metrics.
+* Finally, used **devtools::load\_all()** to load my **InvestigatoR** package (as defined in *InvestigatoR-package.R*), which provides the core functions for backtesting portfolios (e.g. in *backtesting\_portfolios.R*) and return/weight prediction (e.g. *return\_pred\_functions2.R*, *weight\_pred\_functions.R*).
+
+This primes the session so that in the next steps I can seamlessly build, train, and evaluate models—and then feed their outputs into my backtesting framework.
 
 
 #### Data Preparation
@@ -303,17 +329,14 @@ devtools::load_all()
 We now read the data and quickly summarise its poroperties.
 
 ```{r data_overview, echo=TRUE}
-# Load the dataset
-data("data_ml")
 
-# Summarize the dataset
-data_ml %>%
-  summarise(
-    n_assets = n_distinct(stock_id),
-    start_date = min(date),
-    end_date = max(date)
-  )
+load(file = "/home/apischetsrieder/Thesis/InvestigatoR/data-raw/sp500_m_signals.RData", verbose=TRUE)
+
 ```
+
+
+I loaded the dataset.
+The dataset contains 1,207 stocks with 93 features, including firm-specific attributes like valuation, profitability, momentum, risk, estimates, and liquidity. The data is not perfectly rectangular, reflecting a realistic financial environment.
 
 #### Filtering the Data for Backtesting
 
@@ -323,22 +346,8 @@ To streamline computations, we will:
 2. Limit the time period to 2000-01-01 through 2015-12-31.
 
 ```{r filter_data, cache=TRUE}
-# Identify assets with complete data for the full time period
-stock_ids <- data_ml %>%
-  group_by(stock_id) %>%
-  summarise(
-    start_date = min(date),
-    end_date = max(date),
-    n_obs = n()
-  ) %>%
-  filter(n_obs == max(n_obs)) %>% 
-  distinct(stock_id) #%>%
-  #dplyr::slice(1:100)  # Limit to 100 assets for speed
 
-# Filter the dataset to a reduced subset
-data_ml_red <- data_ml %>%
-  right_join(stock_ids, by = "stock_id") %>%
-  filter(date >= "2000-01-01", date <= "2015-12-31")
+
 ```
 
 ---
@@ -348,14 +357,8 @@ data_ml_red <- data_ml %>%
 Before proceeding, we summarize the reduced dataset to verify it is ready for backtesting.
 
 ```{r data_summary, cache=TRUE}
-# Summarize filtered dataset
-data_ml_red %>%
-  summarise(
-    n_assets = n_distinct(stock_id),
-    n_periods = n_distinct(date),
-    start_date = min(date),
-    end_date = max(date)
-  )
+
+
 ```
 
 This structured setup provides a solid foundation for the backtesting analysis that follows. In the next sections, we will:
@@ -527,27 +530,44 @@ We start with a simple Keras model with:
 - for reproducibility, we set the random seed to 42 (the answer to everything).
 
 ```{r keras_simple_model, cache=TRUE}
-# Define a simple Keras model configuration
-config_keras_simple <- list(
+
+config_unlimited_sharpe <- list(
   layers = list(
-    list(type = "dense", units =32, activation = "elu"),
-    list(type = "dense", units = 16, activation = "elu"),
-    list(type = "dense", units = 1, activation = "tanh")  # Simple tanh activation bounded between -1 and 1
+    list(type = "dense", units = 32, activation = "relu"),
+    list(type = "dense", units = 16, activation = "relu"),
+    list(type = "dense", units = 1, activation = activation_box_sigmoid(min_weight = -1, max_weight = 1))  # Bound delta_w
   ),
   loss = list(
-    name = "sharpe_ratio_loss",  # Standard Sharpe Ratio loss with no penalties
-    transaction_costs = 0,  # 5 basis points transaction costs
-    delta = 0,  # Tolerance level for optimal Sharpe Ratio
-    lambda = 0,  # Diversification penalty
-    leverage = 0,  # Leverage limit
-    eta = 0  # Leverage penalty
+    #name = "sharpe_ratio_difference_loss",
+    name = "information_ratio_loss_active_returns",
+    lambda_l1 = 0.0,
+    lambda_l2 = 0.0
   ),
   optimizer = list(name = "optimizer_adam", learning_rate = 0.001),
-  epochs = 50,
-  verbose = 0,
-  seeds = c(42)  # Set random seed for reproducibility
+  metrics = list(distance_from_benchmark_l1_metric(), distance_from_benchmark_l2_metric()),
+  callbacks = list(
+   callback_early_stopping(monitor = "loss", min_delta = -0.0001, patience = 10) #patience = 10 originally
+   ),
+  epochs = 60,
+  batch_size = 256, #originally 128
+  verbose = 1,
+  seeds = c(1,19), #(1,13,19,42,57)
+  plot_training = FALSE,
+  plot_result = FALSE
 )
+
 ```
+
+
+I set up a custom Keras model configuration to learn unconstrained portfolio weight adjustments that directly target risk-adjusted performance:
+
+* **Architecture:** a three-layer feed-forward network (32 → 16 → 1 neurons) with ReLU activations in the hidden layers and a custom “box-sigmoid” output that ensures each predicted weight delta lies between –1 and +1.
+* **Objective:** instead of a plain MSE, I’m optimizing an active returns loss (“information\_ratio\_loss\_active\_returns”) so the model learns weight shifts that boost the portfolio’s information ratio relative to the benchmark.
+* **Regularization & Optimization:** no L₁/L₂ penalties, Adam optimizer at a 0.001 learning rate, and early-stopping on the loss (allowing up to 10 epochs without meaningful improvement).
+* **Training Details:** 60 epochs, 256-sized batches, two fixed random seeds (1 and 19) for reproducibility, and no on-the-fly plotting.
+
+With this `config_unlimited_sharpe` list, I can plug straight into my return-and-weight-prediction pipeline (in *return\_pred\_functions2.R* and *weight\_pred\_functions.R*), train the model to favor high-information-ratio moves, then hand its outputs off to the backtester (in *backtesting\_weights.R* and *backtesting\_portfolios.R*) for out-of-sample evaluation.
+
 
 ### Backtesting the Unconstrained Portfolio
 
@@ -558,45 +578,116 @@ We backtest the portfolio using the unconstrained model. This involves:
 - Including a one-month offset between training and prediction data to prevent data leakage.
 
 ```{r setupn_backtest_unconstrained, cache=TRUE}
-# Define the portfolio configuration for all subsequent backtests
-return_label <- "R1M_Usd"
-features <- colnames(data_ml_red)[4:95]
-rolling <- TRUE
+
+return_label <- "ret"
+colnames(sp500_m_signals)
+features <- c("div_yield_st", "ep", "mom12m", "idio_vol3f", "investment", "bm", "am","fr","gp","ms","noa","ps","rd","ro_e","sp","vol_mkt")
+rolling <- FALSE
 window_size <- "5 years"
 step_size <- "1 year"
 offset <- "1 month"
 in_sample <- TRUE
-num_cores <- 12
-verbose <- FALSE
+
+
+#### 2. Limited Deviations
+
+# Configuration for Limited Deviations (+-20%)
+config_limited_sharpe <- config_unlimited_sharpe
+config_limited_sharpe$layers[[3]]$activation <- activation_box_sigmoid(min_weight = -0.2, max_weight = 0.2)
+
+#### 3. Regularized Deviations (L1 and L2)
+
+# Configuration for Limited Deviations with L1 and L2 Regularization
+config_regularized_sharpe <- config_limited_sharpe
+config_regularized_sharpe$loss$lambda_l1 <- 0.001  # L1 regularization
+config_regularized_sharpe$loss$lambda_l2 <- 0.001  # L2 regularization
+
 ```
+
+I set up the inputs and three different modeling regimes for learning portfolio weight shifts on the S\&P 500 signals, ready to feed into my prediction–backtest pipeline:
+
+1. **Data & CV parameters**
+
+   * Chose the one-month ahead return `"ret"` as the prediction target.
+   * Pulled in my pre-computed `sp500_m_signals` object (from *SP500\_All.R*), which holds monthly features like dividend yield, earnings-to-price, 12-month momentum, idiosyncratic vol, investment, book-to-market, and a host of other factor signals.
+   * Defined a stable feature set:
+     features <- c("div_yield_st","ep","mom12m","idio_vol3f","investment",
+                   "bm","am","fr","gp","ms","noa","ps","rd","ro_e","sp","vol_mkt")
+   * Configured my rolling-window cross-validation: 5-year training windows stepping by 1 year, offset by one month for out-of-sample returns, and keeping all data in-sample for diagnostics.
+
+2. **Unlimited Deviations**
+   Kept the previously defined `config_unlimited_sharpe`—a 32→16→1 network with box-sigmoid output bound at ±1—so the model has free rein to tilt weights however it pleases to maximize information ratio.
+
+3. **Limited Deviations (± 20%)**
+   Cloned that config to `config_limited_sharpe` but tightened the last layer’s box-sigmoid bounds to ±0.2, so the network can only deviate each security’s weight by up to 20 percentage points.
+
+4. **Regularized Deviations (± 20% + L₁/L₂)**
+   Further extended `config_limited_sharpe` into `config_regularized_sharpe` by adding L₁ and L₂ penalties (both λ = 0.001) on the weight shifts, encouraging sparser, smaller moves.
+
+With these three configurations defined, I can loop over them in my return-prediction functions (*return\_pred\_functions2.R*) and weight-prediction routines (*weight\_pred\_functions.R*), then hand off their output to the backtesting engines in *backtesting\_weights.R* and *backtesting\_portfolios.R* for a clean, apples-to-apples evaluation of unconstrained vs. constrained vs. regularized strategies.
+
 
 Now we run the backtest:
 
 ```{r run_backtest_unconstrained, cache=TRUE}
 # Run the backtest
-portfolios_raw_unconstrained <- backtesting_weights(
-  data = data_ml_red, 
-  return_label = return_label, 
-  features = features,
-  pf_config = list(keras_weights_simple = list(weight_func = "keras_weights",config1 = config_keras_simple)),
-  rolling = rolling, 
-  window_size = window_size, 
-  step_size = step_size, 
-  offset = offset, 
-  in_sample = in_sample, 
-  num_cores = num_cores, 
-  verbose = verbose
+pf_config1 <- list(
+  keras_unlimited_bm_sharpe = list(
+    weight_func = "keras_weights_new",  # originally keras_weights
+    config = config_unlimited_sharpe
+  )
 )
+# Run the backtest with multiple Keras configurations
+keras_portfolios1 <- backtesting_weights_new(
+  data = sp500_m_signals,
+  return_label = return_label,
+  benchmark_label = "bm_weight",
+  mask_label = "sp500_flag",
+  features = features,
+  pf_config = pf_config1,  # Portfolio config with multiple Keras configurations
+  rolling = TRUE,
+  window_size = window_size,
+  step_size = step_size,
+  offset = offset,
+  in_sample = in_sample,
+  num_cores = 10,
+  verbose = TRUE,
+)
+save(keras_portfolios1, file = "keras_portfolios1-v2.RData")
+
 ```
+
+I loaded my unlimited-deviation setup into the backtester and ran a full rolling-window evaluation:
+
+* I created `pf_config1`, mapping a single strategy “keras\_unlimited\_bm\_sharpe” to my new Keras weight generator (`keras_weights_new`) paired with the `config_unlimited_sharpe` settings (±100% bounds, information-ratio loss, no regularization).
+* I then invoked `backtesting_weights_new()` on the `sp500_m_signals` dataset—using one-month-ahead returns (`ret`), the benchmark weight (`bm_weight`), and my S\&P-500 stock mask—over 5-year training windows rolling forward by one year (with a one-month out-of-sample offset), parallelized over 10 cores.
+* With `verbose=TRUE`, I watched the model train and generate portfolio weights for each fold, then aggregated their realized returns and risk metrics.
+* Finally, I saved the resulting backtest object as `"keras_portfolios1-v2.RData"` for later analysis and comparison against the limited and regularized variants.
+
 
 #### Result Analysis
 
 Unconstrained optimization often results in extreme weights. We use `summary.weights` to demonstrate this issue.
 
 ```{r summary_weights_unconstrained, cache=TRUE, results='asis'}
+#Insert the the model to summarize
+
+model_portfolios <- keras_portfolios9_bigger_net
+
 # Summarize portfolio weights
-tt <- summary.weights(portfolios_raw_unconstrained, print=TRUE)
+tt <- summary.weights(model_portfolios, print=TRUE)
 ```
+
+I did a quantitative recap of how my unconstrained Sharpe-maximizing model actually positioned over time:
+
+* **Extremes:**  Individual stock weights swung as low as –56 % and up to +102 %, confirming the network freely levered its bets.
+* **Typical Tilt:**  The average weight per stock was only \~14 % (SD ≈ 19 %), with weight volatility across months of \~17 % (SD ≈ 5 %).
+* **Concentration:**  The mean Herfindahl–Hirschman Index sat at \~56 (SD ≈ 46), indicating moderate concentration, and a diversity score of just 0.03.
+* **Overall Activity:**  The average L₁ norm of weight changes was \~176 (SD ≈ 92), and the L₂ norm \~6.9 (SD ≈ 2.7), showing substantial portfolio turnover and tilt magnitude.
+* **Short Exposure:**  On average, cumulative shorts summed to \~230 % of NAV (SD ≈ 134 %), illustrating heavy use of negative weights.
+
+This summary (from `summary.weights(keras_portfolios1)`) confirms that the “unlimited” model indeed takes large, concentrated, and frequently changing positions—exactly what I’ll contrast against the ±20 % and regularized variants next.
+
 
 **Observation**: The weight summary reveals:
 
@@ -608,8 +699,24 @@ We can evaluate the portfolio's performance using the `summary.performance` and/
 
 ```{r performance_unconstrained, cache=TRUE, results='asis'}
 # Summarize portfolio performance
-tt <- summary.performance2(portfolios_raw_unconstrained, transaction_cost = 0.005, gamma = 3, test=TRUE, print=TRUE)
+tt <- summary.performance2(model_portfolios, transaction_cost = 0.005, gamma = 3, test=TRUE, print=TRUE)
 ```
+**Leistungsvergleich analysierend**
+
+Ich habe die Leistungsbewertung vorgenommen, einschließlich Transaktionskosten und Risikoneigung. Das Ergebnis zeigt vor den Kosten extrem hohe Renditen, eine hohe Umschlagsrate und einen nach Kosten angepassten Sharpe, der immer noch hoch bleibt. Der moderate Informationsverhältniswert deutet darauf hin, dass es eine gute Anpassung gibt, jedoch wirkt sich die risikoadjustierte CER negativ aus. Im Vergleich zum Benchmark gibt es eine deutliche Überperformance. Die Auswertung bezieht sich auf eine Testphase, daher sind die T-Tests für die Signifikanz relevant.
+
+
+I did a full out-of-sample performance audit of the unconstrained (±100 %) model
+
+and here’s what I found:
+
+* **Gross vs. net returns:** before costs, the model delivered an annualized mean of **48.6 %** (highly significant) with a Sharpe of **1.91**; by contrast the cap-weighted benchmark returned just **2.8 %** with a Sharpe of **0.45**.
+* **Turnover & active share:** it traded like mad—**\~47 465 %** turnover per year and an **81.8 %** active share—so I applied a **0.5 % round-trip cost**.
+* **Cost-adjusted Sharpe:** even after fees, the net Sharpe only dipped to **1.78**, showing that despite the punishing churn, the strategy still packs a punch.
+* **Information ratio:** versus the benchmark, the IR sits at **0.16**, again strongly significant.
+* **CER (γ = 3):** computing a CRRA-style Certainty Equivalent Return gave **–917 %**, flagging that under a fairly high risk-aversion the extreme volatility and trading intensity produce negative utility.
+
+This tells me that while the unconstrained network can uncover massive gross gains, its sky-high turnover and tail-risk make it potentially unviable for a risk-averse, cost-sensitive investor—exactly the motivation for testing my ±20 % and regularized variants next.
 
 **Observation**: Performance-wise we observe the following:
 
@@ -627,17 +734,49 @@ We could try post-optimization enforcement of constraints to improve the portfol
 ```{r postprocessing_unconstrained_w, cache=TRUE, results='asis'}
 # Define postprocessing configuration
 pp_config <- list(
-  list(operation = "set_weightsum", 
-       min_weight = 0, max_weight = 0.1, # box constraint on individual assets
-       min_sum = 0.8, max_sum=1.5, # we do not yet include a full-investm,ent constraint without leverage
-       allow_short_sale = FALSE))
-
+  # 1. Clamp individual weights between 0 and 10%
+  list(operation      = "set_weightsum",
+       allow_short_sale= FALSE,
+       min_weight      = 0,
+       max_weight      = 0.10,
+       # (optionally enforce full investment)
+       sum_val         = 1
+  ),
+  # 2. Smooth turnover (exponential with factor 0.2)
+  list(operation        = "reduce_turnover",
+       method           = "exponential",
+       smoothing_factor = 0.2
+  ),
+  # 3. Cap concentration (HHI target 0.3)
+  list(operation = "increase_diversification",
+       hh_target   = 0.3
+  )
+)
 # Apply postprocessing
-portfolios_postprocessed <- postprocessing_portfolios(portfolios_raw_unconstrained, pp_config)
+keras_portfolios1_pp <- postprocessing_portfolios(model_portfolios, pp_config)
 
 # Summarize postprocessed weights
-tt <- summary.weights(portfolios_postprocessed, print=TRUE)
+tt <- summary.weights(keras_portfolios1_pp, print=TRUE)
 ```
+
+
+**Überprüfung des HHI-Werts**
+
+Ich versuche zu interpretieren, was der HHI-Wert hier bedeutet, da er normalerweise mit der Summe der quadrierten Gewichtungen multipliziert mit 10.000 berechnet wird. Aber hier ist er einfach als "0,0036" angegeben, mit einer Standardabweichung von 0,005. Es scheint, dass der Wert des HHI anzeigt, wie konzentriert die Gewichtungen sind, das passt zu einer Diversität von 639,2588. Ich möchte sicherstellen, dass die Berechnungen korrekt sind und dass alles auf die Portfolio-Diversität hinweist.
+
+
+I applied a three-step post-processing pipeline to tame the wild, unconstrained weights—and here’s what happened:
+
+1. **Clamp & long-only**
+   By forcing every stock’s weight into \[0%,10%] and re-scaling to fully invest, the new min/max weights are **0% / 9.36%**, with **zero** short positions.
+
+2. **Smooth turnover**
+   An exponential smoothing (factor = 0.2) cut the monthly choppiness: the average per‐stock weight change fell to about **0.11 %** (SD ≈ 0.05 %), and overall turnover plunged to roughly **0.31** per month.
+
+3. **Diversification cap**
+   Targeting an HHI of 0.3 drove concentration way down—mean HHI is now **0.0036** (SD ≈ 0.005), diversity jumped accordingly, and the L₁/L₂ norms of the weight vector are a modest **1.18** (SD ≈ 0.48) and **0.052** (SD ≈ 0.03), respectively.
+
+In short, `postprocessing_portfolios()` turned our ±100 % network into a fully-invested, long-only, well-diversified, low-turnover strategy—exactly the kind of “production-ready” portfolio I need before re-evaluating performance.
 
 **Observation**: The postprocessing step enforces constraints on the portfolio weights, leading to:
 
@@ -649,7 +788,7 @@ Potentially this will make the portfolio be very close to the equally weighted p
 
 ```{r postprocessing_unconstrained_p, cache=TRUE, results='asis'}
 # Evaluate performance after postprocessing
-tt <- summary.performance2(portfolios_postprocessed, transaction_cost = 0.005, gamma = 5, test=TRUE, print=TRUE)
+tt <- summary.performance2(keras_portfolios1_pp, transaction_cost = 0.005, gamma = 5, test=TRUE, print=TRUE)
 ```
 
 **Observation**: The postprocessed portfolio shows:

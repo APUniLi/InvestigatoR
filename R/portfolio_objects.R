@@ -973,12 +973,28 @@ postprocessing_portfolios <- function(portfolio_object, config) {
   # -----------------------------
 
   # Pivot weights_long_processed back to wide format
+  # First unnest any list-columns into pure numerics:
+  weights_long <- weights_long %>% tidyr::unnest(cols = weight)
+
+
   weights_wide_processed <- weights_long %>%
     tidyr::pivot_wider(
-      names_from = model_id,
-      values_from = weight,
-      values_fill = 0
+      names_from   = model_id,
+      values_from  = weight,
+         values_fill  = list(.default = 0),
+         values_fn    = list(weight = ~ .x[[length(.x)]])
+    ) %>%
+    dplyr::mutate(
+      dplyr::across(
+        where(is.list),
+        ~ purrr::map_dbl(.x, ~ .x[[1]])
+      )
     )
+
+
+
+  weights_wide_processed <- weights_wide_processed %>%
+    mutate(across(-c(stock_id, date), as.numeric))
 
   model_names <- names(weights_wide_processed)[-c(1,2)]
 
