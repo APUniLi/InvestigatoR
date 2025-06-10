@@ -275,6 +275,8 @@ Ac cordingv to thge website, the dataset comprises information on 1,207 stocks l
 #### ibraries and Environment Setup
 
 ```{r setup_libraries, include=TRUE}
+#reticulate::use_virtualenv("/home/sstoeckl/Packages/python/")
+reticulate::use_virtualenv("r-reticulate", required = TRUE)
 
 library(reticulate)
 library(tensorflow)
@@ -295,8 +297,7 @@ cat("OMP_NUM_THREADS        =", Sys.getenv("OMP_NUM_THREADS"), "\n")
 cat("MKL_NUM_THREADS        =", Sys.getenv("MKL_NUM_THREADS"), "\n")
 cat("OPENBLAS_NUM_THREADS   =", Sys.getenv("OPENBLAS_NUM_THREADS"), "\n")
 library(keras3)
-#reticulate::use_virtualenv("/home/sstoeckl/Packages/python/")
-reticulate::use_virtualenv("r-reticulate", required = TRUE)
+
 # check for python availability and whether modules are installed
 reticulate::py_config()
 reticulate::py_module_available("tensorflow")
@@ -347,6 +348,55 @@ To streamline computations, we will:
 
 ```{r filter_data, cache=TRUE}
 
+sp500_m_signals <- sp500_m_signals %>%
+  arrange(stock_id, date) %>%
+  group_by(stock_id) %>%
+  mutate(
+    mktcap_lag = dplyr::lag(mktcap)       
+  ) %>%
+  ungroup() %>%
+  group_by(date) %>%
+  # 1) drop rows where we have no lagged cap (so first‐obs are out)
+  filter(!is.na(mktcap_lag)) %>%
+  # 2) rank uniquely by lagged cap, breaking ties deterministically
+  mutate(rank_desc = row_number(desc(mktcap_lag))) %>%
+  # 3) top‐500 get value‐weights, everyone else 0
+  mutate(
+    bm_new = if_else(
+      rank_desc <= 500,
+      mktcap_lag / sum(mktcap_lag[rank_desc <= 500], na.rm = TRUE),
+      0
+    )
+  ) %>%
+  ungroup() %>%
+  select(-rank_desc)
+
+
+
+sp500_m_signals %>%
+  group_by(date) %>%
+  summarise(
+    n_selected = sum(bm_new > 0),
+    tot_weight = sum(bm_new, na.rm = TRUE)
+  ) %>%
+  filter(n_selected != 500 | abs(tot_weight - 1) > 1e-6)
+
+
+
+
+sp500_m_signals <- sp500_m_signals %>%
+  mutate(
+    # 1 if this stock is in the top-500 (bm_new>0), else 0
+    sp500_flag_new = if_else(bm_new > 0, 1L, 0L)
+  )
+
+sp500_m_signals %>%
+  summarise(
+    n_flag_old   = sum(sp500_flag, na.rm=TRUE),
+    n_flag_new   = sum(sp500_flag_new, na.rm=TRUE),
+    n_bm_positive = sum(bm_new > 0, na.rm=TRUE)
+  )
+# n_flag_new and n_bm_positive should be identical
 
 ```
 
@@ -533,8 +583,10 @@ We start with a simple Keras model with:
 
 config_unlimited_sharpe <- list(
   layers = list(
-    list(type = "dense", units = 32, activation = "relu"),
+    list(type = "dense", units = 64, activation = "relu",dropout = 0.3),
+    list(type = "dense", units = 32, activation = "relu",dropout = 0.2),
     list(type = "dense", units = 16, activation = "relu"),
+    list(type = "dense", units =  8, activation = "relu"),
     list(type = "dense", units = 1, activation = activation_box_sigmoid(min_weight = -1, max_weight = 1))  # Bound delta_w
   ),
   loss = list(
@@ -543,15 +595,16 @@ config_unlimited_sharpe <- list(
     lambda_l1 = 0.0,
     lambda_l2 = 0.0
   ),
-  optimizer = list(name = "optimizer_adam", learning_rate = 0.001),
+  optimizer = list(name = "optimizer_adam", learning_rate = 0.0005), #originally 0.001
   metrics = list(distance_from_benchmark_l1_metric(), distance_from_benchmark_l2_metric()),
   callbacks = list(
-   callback_early_stopping(monitor = "loss", min_delta = -0.0001, patience = 10) #patience = 10 originally
+   callback_early_stopping(monitor = "loss", min_delta = -0.0001, patience = 8), #patience = 10 originally
+   callback_reduce_lr_on_plateau( monitor    = "loss", factor     = 0.5, patience   = 4, min_lr     = 1e-6 ) #added
    ),
-  epochs = 60,
+  epochs = 80, #originally 60
   batch_size = 256, #originally 128
   verbose = 1,
-  seeds = c(1,19), #(1,13,19,42,57)
+  seeds = c(19), #(1,13,19,42,57)
   plot_training = FALSE,
   plot_result = FALSE
 )
@@ -582,7 +635,7 @@ We backtest the portfolio using the unconstrained model. This involves:
 return_label <- "ret"
 colnames(sp500_m_signals)
 features <- c("div_yield_st", "ep", "mom12m", "idio_vol3f", "investment", "bm", "am","fr","gp","ms","noa","ps","rd","ro_e","sp","vol_mkt")
-rolling <- FALSE
+rolling <- TRUE
 window_size <- "5 years"
 step_size <- "1 year"
 offset <- "1 month"
@@ -601,6 +654,28 @@ config_limited_sharpe$layers[[3]]$activation <- activation_box_sigmoid(min_weigh
 config_regularized_sharpe <- config_limited_sharpe
 config_regularized_sharpe$loss$lambda_l1 <- 0.001  # L1 regularization
 config_regularized_sharpe$loss$lambda_l2 <- 0.001  # L2 regularization
+
+
+## Portfolio Optimization Settings (Information Ratio 1)
+
+# Configuration for Information Ratio Loss based on Active Returns
+config_unlimited_ir1 <- config_unlimited_sharpe
+config_unlimited_ir1$loss$name <- "information_ratio_loss_active_returns"
+config_limited_ir1 <- config_limited_sharpe
+config_limited_ir1$loss$name <- "information_ratio_loss_active_returns"
+config_regularized_ir1 <- config_regularized_sharpe
+config_regularized$loss$name <- "information_ratio_loss_active_returns"
+
+## Portfolio Optimization Settings (Information Ratio 1)
+
+# Configuration for Information Ratio Loss based on Active Returns
+config_unlimited_ir2 <- config_unlimited_sharpe
+config_unlimited_ir2$loss$name <- "information_ratio_loss_regression_based"
+config_limited_ir2 <- config_limited_sharpe
+config_limited_ir2$loss$name <- "information_ratio_loss_regression_based"
+config_regularized_ir2 <- config_regularized_sharpe
+config_regularized_ir2$loss$name <- "information_ratio_loss_regression_based"
+
 
 ```
 
@@ -631,29 +706,31 @@ Now we run the backtest:
 
 ```{r run_backtest_unconstrained, cache=TRUE}
 # Run the backtest
-pf_config1 <- list(
-  keras_unlimited_bm_sharpe = list(
-    weight_func = "keras_weights_new",  # originally keras_weights
-    config = config_unlimited_sharpe
+pf_config9 <- list(
+  keras_regularized_bm_ir2 = list(
+    weight_func = "keras_weights_new",
+    config = config_regularized_ir2
   )
 )
 # Run the backtest with multiple Keras configurations
-keras_portfolios1 <- backtesting_weights_new(
+keras_portfolios9_bigger_net <- backtesting_weights_new(
   data = sp500_m_signals,
   return_label = return_label,
-  benchmark_label = "bm_weight",
-  mask_label = "sp500_flag",
+  benchmark_label = "bm_new",
+  mask_label = "sp500_flag_new",
   features = features,
-  pf_config = pf_config1,  # Portfolio config with multiple Keras configurations
+  pf_config = pf_config9,  # Portfolio config with multiple Keras configurations
+  # portfolio_object = keras_portfolios8,
   rolling = TRUE,
   window_size = window_size,
   step_size = step_size,
   offset = offset,
   in_sample = in_sample,
-  num_cores = 10,
-  verbose = TRUE,
+  num_cores = 1,
+  verbose = TRUE
 )
-save(keras_portfolios1, file = "keras_portfolios1-v2.RData")
+
+save(keras_portfolios9_bigger_net, file = "keras_portfolios9v3_new_bm.RData")
 
 ```
 

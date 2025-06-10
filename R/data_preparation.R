@@ -5,7 +5,7 @@ sp500_m_signals <- sp500_m_signals %>%
   arrange(stock_id, date) %>%
   group_by(stock_id) %>%
   mutate(
-    mktcap_lag = dplyr::lag(mktcap)       # use dplyr::lag explicitly
+    mktcap_lag = dplyr::lag(mktcap)
   ) %>%
   ungroup() %>%
   group_by(date) %>%

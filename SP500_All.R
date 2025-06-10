@@ -337,6 +337,7 @@ pf_config9 <- list(
     config = config_regularized_ir2
   )
 )
+
 keras_portfolios9_bigger_net <- backtesting_weights_new(
   data = sp500_m_signals,
   return_label = return_label,
@@ -353,4 +354,5 @@ keras_portfolios9_bigger_net <- backtesting_weights_new(
   num_cores = 1,
   verbose = TRUE
 )
+
 save(keras_portfolios9_bigger_net, file = "keras_portfolios9v3_new_bm.RData")
