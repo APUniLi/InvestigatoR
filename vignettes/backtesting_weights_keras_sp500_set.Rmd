@@ -1,6 +1,6 @@
 ---
 title: "Backtesting Portfolio Weight Optimization"
-author: "Dr. Sebastian Stöckl"
+author: "Andreas Pischetsrieder"
 date: "`r Sys.Date()`"
 output:
   rmarkdown::html_vignette:
