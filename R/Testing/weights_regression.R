@@ -33,11 +33,19 @@ reg_data <- keras_portfolios9_bigger_net$weights %>%
             by = c("stock_id", "date")) %>%
   drop_na()
 
-# 5) Run linear regression of weights on predictors
+# 5) Run linear regression of weights on predictors (full sample)
 reg_formula <- as.formula(paste("weight ~", paste(features, collapse = " + ")))
 reg_model <- lm(reg_formula, data = reg_data)
 
-# 6) Display coefficients ordered by absolute value
+# 6) Display coefficients ordered by absolute value for full sample
 coeff_table <- broom::tidy(reg_model) %>%
   arrange(desc(abs(estimate)))
 print(coeff_table)
+
+# 7) Estimate coefficients separately for each time window
+coeff_by_window <- reg_data %>%
+  group_by(date) %>%
+  do(broom::tidy(lm(reg_formula, data = .))) %>%
+  ungroup()
+
+print(coeff_by_window)
