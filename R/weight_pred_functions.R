@@ -1348,14 +1348,31 @@ activation_sum_sigmoid <- function(target_sum = 0.0) {
 #' @return A tibble with `stock_id`, `date`, and `pred_weight` columns.
 #' @export
 ols_bm_tilt <- function(train_x, train_y, train_meta, test_x, test_meta, model_config = list()) {
-  train_df <- data.frame(ret = train_y, train_x)
-  fit <- stats::lm(ret ~ ., data = train_df)
-  pred <- as.vector(cbind(1, test_x) %*% stats::coef(fit))
-  tilt <- pred - mean(pred)
-  if (sum(abs(tilt)) > 0) {
-    tilt <- tilt / sum(abs(tilt))
+  train_df <- as.data.frame(train_x)
+  train_df$ret <- train_y
+
+  fit <- tryCatch(
+    stats::lm(ret ~ ., data = train_df, na.action = stats::na.exclude),
+    error = function(e) NULL
+  )
+
+  pred <- tryCatch(
+    stats::predict(fit, newdata = as.data.frame(test_x)),
+    error = function(e) rep(0, nrow(test_x))
+  )
+
+  pred[is.na(pred)] <- 0
+
+  tilt <- pred - mean(pred, na.rm = TRUE)
+  denom <- sum(abs(tilt), na.rm = TRUE)
+  if (denom > 0) {
+    tilt <- tilt / denom
+  } else {
+    tilt <- rep(0, length(pred))
   }
+
   tilt <- pmax(pmin(tilt, 1), -1)
+
   tibble::tibble(
     stock_id = test_meta$stock_id,
     date = test_meta$date,
