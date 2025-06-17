@@ -1327,3 +1327,38 @@ activation_sum_sigmoid <- function(target_sum = 0.0) {
   }
 }
 
+#' OLS Benchmark Weight Prediction Function
+#'
+#' Simple baseline to forecast benchmark tilts using multiple linear regression.
+#' The function fits an ordinary least squares model of returns on the provided
+#' features for each training window and converts the predicted returns into
+#' benchmark-relative weights. Predicted returns are demeaned so the weights sum
+#' to zero and scaled so the sum of absolute weights equals one. Weights are
+#' finally clipped to the range [-1, 1].
+#'
+#' @param train_x Matrix of predictor variables for the training sample.
+#' @param train_y Numeric vector of returns for the training sample.
+#' @param train_meta Data frame with `stock_id`, `date`, and `benchmark` columns
+#'   for the training sample. Included for interface compatibility.
+#' @param test_x Matrix of predictors for the prediction sample.
+#' @param test_meta Data frame with `stock_id` and `date` for the prediction
+#'   sample.
+#' @param model_config Optional list of parameters (currently unused).
+#'
+#' @return A tibble with `stock_id`, `date`, and `pred_weight` columns.
+#' @export
+ols_bm_tilt <- function(train_x, train_y, train_meta, test_x, test_meta, model_config = list()) {
+  train_df <- data.frame(ret = train_y, train_x)
+  fit <- stats::lm(ret ~ ., data = train_df)
+  pred <- as.vector(cbind(1, test_x) %*% stats::coef(fit))
+  tilt <- pred - mean(pred)
+  if (sum(abs(tilt)) > 0) {
+    tilt <- tilt / sum(abs(tilt))
+  }
+  tilt <- pmax(pmin(tilt, 1), -1)
+  tibble::tibble(
+    stock_id = test_meta$stock_id,
+    date = test_meta$date,
+    pred_weight = tilt
+  )
+}

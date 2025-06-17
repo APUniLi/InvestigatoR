@@ -356,3 +356,29 @@ keras_portfolios9_bigger_net <- backtesting_weights_new(
 )
 
 save(keras_portfolios9_bigger_net, file = "keras_portfolios9v3_new_bm.RData")
+
+# Benchmark OLS model predicting benchmark tilts
+pf_config_ols <- list(
+  ols_benchmark = list(
+    weight_func = "ols_bm_tilt",
+    config = list()
+  )
+)
+
+ols_benchmark_portfolios <- backtesting_weights_new(
+  data = sp500_m_signals,
+  return_label = return_label,
+  benchmark_label = "bm_new",
+  mask_label = "sp500_flag_new",
+  features = features,
+  pf_config = pf_config_ols,
+  rolling = TRUE,
+  window_size = window_size,
+  step_size = step_size,
+  offset = offset,
+  in_sample = in_sample,
+  num_cores = 1,
+  verbose = TRUE
+)
+
+save(ols_benchmark_portfolios, file = "ols_benchmark_portfolios.RData")
