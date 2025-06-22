@@ -38,10 +38,14 @@ p_period <- ggplot(perf_df, aes(x = date, y = outperformance)) +
   scale_fill_manual(values = c(`TRUE` = "seagreen3", `FALSE` = "firebrick3")) +
   theme_minimal()
 
-# 5) Summarise outperformance by year
+
+# build a Date column for plotting
 annual_df <- perf_df %>%
-  mutate(year = year(date)) %>%
-  group_by(year) %>%
+  mutate(
+    year = year(date),
+    year_date = as.Date(paste0(year, "-01-01"))
+  ) %>%
+  group_by(year, year_date) %>%
   summarise(
     port_ret = prod(1 + portfolio_return) - 1,
     bench_ret = prod(1 + benchmark_return) - 1,
@@ -49,20 +53,24 @@ annual_df <- perf_df %>%
     .groups = "drop"
   )
 
-# 6) Plot yearly outperformance in the same style
-p_year <- ggplot(annual_df, aes(x = factor(year), y = outperformance)) +
+p_year <- ggplot(annual_df, aes(x = year_date, y = outperformance)) +
   geom_col(aes(fill = outperformance > 0), show.legend = FALSE) +
   geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_x_date(
+    date_breaks = "5 years",            # put a tick every 5 years
+    date_labels = "%Y",                 # label them as 4-digit years
+    expand = expansion(add = c(0.5, 0.5)) # give a little padding at the ends
+  ) +
+  scale_fill_manual(values = c(`TRUE` = "seagreen3", `FALSE` = "firebrick3")) +
   labs(
     title = "Yearly Outperformance vs Benchmark",
     x = "Year",
     y = "Return Difference"
   ) +
-  scale_fill_manual(values = c(`TRUE` = "seagreen3", `FALSE` = "firebrick3")) +
   theme_minimal()
 
-print(p_period)
 print(p_year)
+print(p_period)
 
 # 7) Display table of annual returns
 print(annual_df)

@@ -357,6 +357,7 @@ keras_portfolios9_bigger_net <- backtesting_weights_new(
 
 save(keras_portfolios9_bigger_net, file = "keras_portfolios9v3_new_bm.RData")
 
+
 # Benchmark OLS model predicting benchmark tilts
 pf_config_ols <- list(
   ols_benchmark = list(
