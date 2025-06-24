@@ -2,7 +2,7 @@ library(dplyr)
 
 library(dplyr)
 
-distinct_members_by_date <- sp500_m_signals %>%
+distinct_members_by_date <- sp500_m_signals1 %>%
   filter(sp500_flag == 1) %>%
   group_by(date) %>%
   summarise(
@@ -30,7 +30,7 @@ distinct_members_by_date %>%
 
 
 # 2) Look at the first few rows
-members_by_date %>% dplyr::slice(1:10)
+distinct_members_by_date %>% dplyr::slice(1:10)
 
 # 3) Get summary statistics (min, median, max, etc.)
 members_by_date %>%
@@ -41,7 +41,7 @@ members_by_date %>%
   )
 
 # 4) See if there are any dates where n_members deviates from ≈500
-members_by_date %>%
+distinct_members_by_date %>%
   filter(n_members < 450 | n_members > 550) %>%
   arrange(date)
 
@@ -51,7 +51,7 @@ members_by_date %>%
 
 library(dplyr)
 
-universe_vs_flagged <- sp500_m_signals %>%
+universe_vs_flagged <- sp500_m_signals1 %>%
   group_by(date) %>%
   summarise(
     total_tickers    = n_distinct(stock_id),
@@ -77,7 +77,7 @@ universe_vs_flagged %>%
 library(dplyr)
 
 # 1) Count how many rows have sp500_flag == 1 vs. != 1
-sp500_m_signals %>%
+sp500_m_signals1 %>%
   summarise(
     total_rows    = n(),
     n_flag1       = sum(sp500_flag == 1),
@@ -212,4 +212,140 @@ sp500_m_signals %>%
   arrange(ret) %>%
   select(stock_id, date, ret, mktcap) %>%
   dplyr::slice(1:10)
+
+
+
+# -----------------------------------------------------------------------------
+# R Script: Data Description Checks for S&P 500 Neural Network Dataset
+# -----------------------------------------------------------------------------
+# Purpose: Programmatically verify key aspects of the dataset:
+#   1. Universe & Coverage
+#   2. Variables & Definitions
+#   3. Summary Statistics
+#   4. Index Membership Dynamics
+#   5. Market-Cap & Weight Dispersion
+#   6. Correlation Structure
+#   7. Missing Data & Imputation
+#   8. Normalization & Scaling
+#   9. Sample Splits
+#  10. Survivorship / Start‐Date Bias (limitations)
+# -----------------------------------------------------------------------------
+
+# 0. Setup --------------------------------------------------------------------
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+install.packages("skimr")  # Install skimr for summary statistics
+library(skimr)
+
+# Load preprocessed data (assumes you have saved as .RData)
+load("~/Thesis/InvestigatoR/data-raw/sp500_m_signals1.RData")
+# sp500_m_signals1 should be a data.frame or tibble with:
+#   stock_id, date, ret, mktcap, bm_weight, sp500_flag, plus 16 features
+
+# 1. Universe & Coverage -----------------------------------------------------
+cat("1. Universe & Coverage\n")
+universe <- sp500_m_signals1 %>% select(stock_id) %>% distinct()
+cat("  • # unique stocks (PERMNO):", nrow(universe), "\n")
+date_range <- range(sp500_m_signals1$date)
+cat("  • Date range:", format(date_range[1]), "to", format(date_range[2]), "\n\n")
+
+# 2. Variables & Definitions -------------------------------------------------
+cat("2. Variables & Definitions\n")
+all_vars <- names(sp500_m_signals1)
+print(all_vars)
+cat("\n")
+
+# 3. Summary Statistics ------------------------------------------------------
+cat("3. Summary Statistics (returns + features)\n")
+# Returns summary
+cat("  • Monthly returns:\n")
+print(skim(sp500_m_signals1$ret))
+# Features summary
+features <- setdiff(all_vars, c("stock_id","date","ret","mktcap","bm_weight","sp500_flag"))
+cat("  • Feature variables:\n")
+print(skim(sp500_m_signals1 %>% select(all_of(features))))
+cat("\n")
+
+# 4. Index Membership Dynamics -----------------------------------------------
+cat("4. Index Membership Dynamics\n")
+membership_ts <- sp500_m_signals1 %>%
+  group_by(date) %>%
+  summarize(n_in = sum(sp500_flag))
+print(head(membership_ts))
+# Plot membership over time
+ggplot(membership_ts, aes(x = date, y = n_in)) +
+  geom_line() +
+  labs(title = "S&P 500 Membership Over Time",
+       x = "Month", y = "Number of Constituents")
+
+# 5. Market-Cap & Weight Dispersion ------------------------------------------
+cat("5. Market-Cap & Weight Dispersion\n")
+# Distribution of bm_weight each month
+weight_stats <- sp500_m_signals1 %>%
+  group_by(date) %>%
+  summarize(
+    median_w = median(bm_weight),
+    p90_w    = quantile(bm_weight, 0.9),
+    max_w    = max(bm_weight)
+  )
+print(head(weight_stats))
+# Plot top‐decile weight over time
+ggplot(weight_stats, aes(x = date, y = p90_w)) +
+  geom_line() +
+  labs(title = "90th Percentile Benchmark Weight Over Time",
+       x = "Month", y = "P90(bm_weight)")
+
+# 6. Correlation Structure ---------------------------------------------------
+cat("6. Correlation Structure of Signals\n")
+feature_mat <- sp500_m_signals1 %>% select(all_of(features))
+cor_mat <- cor(feature_mat, use = "pairwise.complete.obs")
+print(round(cor_mat, 2))
+# Visualize correlation heatmap
+ggplot(melt(cor_mat), aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  labs(title = "Feature Correlation Matrix")
+
+# 7. Missing Data & Imputation ------------------------------------------------
+cat("7. Missing Data & Imputation\n")
+missing_counts <- sp500_m_signals1 %>%
+  summarize(across(everything(), ~ sum(is.na(.))))
+print(missing_counts)
+cat("  • All features and returns should now have zero missing values.\n\n")
+
+# 8. Normalization & Scaling -------------------------------------------------
+cat("8. Normalization & Scaling Checks\n")
+norm_ranges <- sp500_m_signals1 %>%
+  summarize(across(all_of(features),
+                   list(min = ~ min(.), max = ~ max(.))))
+print(norm_ranges)
+
+# 9. Sample Splits -----------------------------------------------------------
+cat("9. Sample Splits\n")
+# Define your train/val/test cutoffs
+cut_train_end <- as.Date("2009-12-31")
+cut_val_end   <- as.Date("2014-12-31")
+counts_splits <- sp500_m_signals1 %>%
+  mutate(split = case_when(
+    date <= cut_train_end ~ "train",
+    date <= cut_val_end   ~ "validation",
+    TRUE                  ~ "test"
+  )) %>%
+  group_by(split) %>%
+  summarize(n_obs = n())
+print(counts_splits)
+cat("\n")
+
+# 10. Survivorship & Start‐Date Bias -----------------------------------------
+cat("10. Survivorship / Start‐Date Bias Check\n")
+first_dates <- sp500_m_signals1 %>%
+  group_by(stock_id) %>%
+  summarize(start = min(date))
+hist(first_dates$start, breaks = "years",
+     main = "Histogram of Stock Listing (First Observations)",
+     xlab = "First Month in Dataset", ylab = "Count of Stocks")
+
+# End of Script
+# -----------------------------------------------------------------------------
 
