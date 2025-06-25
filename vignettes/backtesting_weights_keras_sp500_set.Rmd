@@ -748,7 +748,7 @@ keras_portfolios_constrained_deep_bm <- backtesting_weights_new(
   verbose = TRUE
 )
 
-save(keras_portfolios_unconstrained_deep_bm, file = "keras_portfolios_constrained_deep_bm.RData")
+save(keras_portfolios_constrained_deep_bm, file = "keras_portfolios_constrained_deep_bm.RData")
 
 # Run the backtest
 pf_config_deep_un <- list(
@@ -798,7 +798,7 @@ keras_portfolios_constrained_shallow <- backtesting_weights_new(
   step_size = step_size,
   offset = offset,
   in_sample = in_sample,
-  num_cores = 1,
+  num_cores = 10,
   verbose = TRUE
 )
 
@@ -829,11 +829,11 @@ keras_portfolios_unconstrained_shallow <- backtesting_weights_new(
   step_size = step_size,
   offset = offset,
   in_sample = in_sample,
-  num_cores = 1,
+  num_cores = 10,
   verbose = TRUE
 )
 
-save(keras_portfolios_constrained_shallow, file = "keras_portfolios_unconstrained_shallow_bm.RData")
+save(keras_portfolios_unconstrained_shallow, file = "keras_portfolios_unconstrained_shallow_bm.RData")
 
 # #OLS Benchmark model
 # pf_config_ols <- list(
@@ -878,11 +878,13 @@ Unconstrained optimization often results in extreme weights. We use `summary.wei
 #Insert the the model to summarize
 
 combined_portfolios <- combine_portfolioReturns(list(
-  keras_portfolios9_bigger_net,
-  keras_portfolios9_shallow_net,
-  keras_portfolios_constrained_deep,
+  keras_portfolios_constrained_deep_bm,
+  keras_portfolios_unconstrained_deep_bm,
   keras_portfolios_constrained_shallow,
-  ols_benchmark_portfolios))
+  keras_portfolios_unconstrained_shallow
+  ))
+
+save(combined_portfolios, file = "combined_portfolios.RData")
 
 # Summarize portfolio weights
 tt <- summary.weights(combined_portfolios, print=TRUE)
@@ -1070,6 +1072,8 @@ combined_portfolios <- combine_portfolioReturns(list(
   portfolios_box_sigmoid,
   postprocessing_portfolios(portfolios_box_sigmoid, pp_config)
 ))
+
+save(combined_portfolios_pp, file = "combined_portfolios_pp.RData")
 
 # Summarize combined weights
 tt <- summary.weights(combined_portfolios, print=TRUE)
