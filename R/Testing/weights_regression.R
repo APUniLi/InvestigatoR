@@ -14,7 +14,7 @@ library(dplyr)
 library(broom)
 
 # 1) Load portfolio object (creates `keras_portfolios9_bigger_net`)
-load("keras_portfolios9v3_new_bm.RData")
+#load("keras_portfolios9v3_new_bm.RData")
 
 # 2) Specify the predictor columns used to train the model
 features <- c(
@@ -23,11 +23,11 @@ features <- c(
 )
 
 # 3) Determine the weight column name produced by the backtest
-weight_col <- setdiff(names(keras_portfolios9_bigger_net$weights),
+weight_col <- setdiff(names(combined_portfolios$weights),
                       c("stock_id", "date"))[1]
 
 # 4) Merge weights with predictors
-reg_data <- keras_portfolios9_bigger_net$weights %>%
+reg_data <- combined_portfolios$weights %>%
   select(stock_id, date, weight = !!sym(weight_col)) %>%
   left_join(sp500_m_signals %>% select(stock_id, date, all_of(features)),
             by = c("stock_id", "date")) %>%
@@ -64,3 +64,75 @@ coeff_by_window %>%
   theme_minimal() -> coeff_plot
 
 print(coeff_plot)
+
+
+
+
+#Per Model
+
+# 3) pivot all weight-columns into long form
+reg_data <- combined_portfolios$weights %>%
+  pivot_longer(
+    cols      = -c(stock_id, date),
+    names_to  = "Portfolio",
+    values_to = "weight"
+  ) %>%
+  left_join(
+    sp500_m_signals %>%
+      select(stock_id, date, all_of(features)),
+    by = c("stock_id", "date")
+  ) %>%
+  drop_na()
+
+# 4) regression formula (same for every portfolio)
+reg_formula <- as.formula(paste("weight ~", paste(features, collapse = " + ")))
+
+# 5) full‐sample coefficients **per portfolio**
+coeff_full <- reg_data %>%
+  group_by(Portfolio) %>%
+  do(tidy(lm(reg_formula, data = .))) %>%
+  ungroup() %>%
+  arrange(Portfolio, desc(abs(estimate)))
+
+print(coeff_full)
+
+# 6) time‐series of coefficients **per portfolio & date**
+coeff_by_window <- reg_data %>%
+  group_by(Portfolio, date) %>%
+  do(tidy(lm(reg_formula, data = .))) %>%
+  ungroup()
+
+print(coeff_by_window)
+
+unique_models <- unique(coeff_by_window$Portfolio)
+
+for (model_name in unique_models) {
+
+  df_m <- coeff_by_window %>%
+    filter(Portfolio == model_name, term != "(Intercept)")
+
+  p_m <- ggplot(df_m, aes(x = date, y = estimate)) +
+    geom_line() +
+    facet_wrap(~ term, scales = "free_y", ncol = 4) +
+    labs(
+      title = paste("Regression Coefficients Over Time for", model_name),
+      x     = "Date",
+      y     = "Coefficient"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text      = element_text(size = 8),
+      axis.text.x     = element_text(angle = 45, hjust = 1),
+      plot.title      = element_text(hjust = 0.5)
+    )
+
+  print(p_m)
+
+  # If you'd like to save each plot to disk, uncomment:
+  # ggsave(
+  #   filename = sprintf("coefficients_over_time_%s.png", model_name),
+  #   plot     = p_m,
+  #   width    = 12,
+  #   height   = 8
+  # )
+}

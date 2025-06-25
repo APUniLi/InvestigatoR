@@ -136,6 +136,13 @@ avg_contrib <- contributions %>%
             .groups = "drop") %>%
   arrange(desc(Avg_Contribution))
 
+avg_contrib_by_model <- contributions %>%
+  group_by(Portfolio, Factor) %>%
+  summarise(
+    Avg_Contribution = mean(Contribution, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(Portfolio, desc(Avg_Contribution))
 #===============================================================================
 # 9.  Outputs
 #    - `exposures`      : tibble (Portfolio, date, Factor, Exposure)
@@ -146,7 +153,7 @@ avg_contrib <- contributions %>%
 
 # Example: print the top 5 exploited predictors
 print(head(avg_contrib, 16))
-
+print(avg_contrib_by_model, n  = 64)
 
 
 # 1) One plot *per model*, facets = factors

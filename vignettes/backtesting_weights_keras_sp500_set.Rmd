@@ -758,7 +758,7 @@ pf_config_deep_un <- list(
   )
 )
 # Run the backtest with multiple Keras configurations
-keras_portfolios_unconstrained_deep_bm <- backtesting_weights_new(
+keras_portfolios_unconstrained_deep_bm_new <- backtesting_weights_new(
   data = sp500_m_signals,
   return_label = return_label,
   benchmark_label = "bm_weight",
@@ -775,7 +775,7 @@ keras_portfolios_unconstrained_deep_bm <- backtesting_weights_new(
   verbose = TRUE
 )
 
-save(keras_portfolios_unconstrained_deep_bm, file = "keras_portfolios_unconstrained_deep_bm.RData")
+save(keras_portfolios_unconstrained_deep_bm_new, file = "keras_portfolios_unconstrained_deep_bm_new.RData")
 
 # Run the backtest
 pf_config_shallow <- list(
@@ -879,7 +879,7 @@ Unconstrained optimization often results in extreme weights. We use `summary.wei
 
 combined_portfolios <- combine_portfolioReturns(list(
   keras_portfolios_constrained_deep_bm,
-  keras_portfolios_unconstrained_deep_bm,
+  keras_portfolios_unconstrained_deep_bm_new,
   keras_portfolios_constrained_shallow,
   keras_portfolios_unconstrained_shallow
   ))
@@ -1029,7 +1029,32 @@ tt <- summary.performance2(combined_portfolios_pp, transaction_cost = 0.005, gam
    - Weight distributions improved significantly, adhering to realistic constraints.
    - Diversification and turnover metrics became more acceptable, making the portfolio closer to being usable for real-world implementation.
 
+```{r}
+# Define postprocessing configuration
+pp_config_tc <- list(
+  # 1. Clamp individual weights between 0 and 10%
+  list(operation      = "set_weightsum",
+       allow_short_sale= TRUE,
+       min_weight      = -1,
+       max_weight      = 1,
+       # (optionally enforce full investment)
+       sum_val         = 1
+  ),
+  # 2. Smooth turnover (exponential with factor 0.2)
+  list(operation        = "reduce_turnover",
+       method           = "exponential",
+       smoothing_factor = 0
+  ),
+  # 3. Cap concentration (HHI target 0.3)
+  list(operation = "increase_diversification",
+       hh_target   = 0.3
+  )
+)
+# Apply postprocessing
 
+combined_portfolios_pp <- postprocessing_portfolios(combined_portfolios, pp_config)
+tt <- summary.performance2(combined_portfolios, transaction_cost = 0.01, gamma = 3, test=TRUE, print=TRUE)
+```
 
 ## Backtesting the Weight-constrained portfolio
 
