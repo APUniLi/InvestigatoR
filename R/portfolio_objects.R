@@ -1510,6 +1510,179 @@ summary.performance2 <- function(portfolio_object, transaction_cost = 0.001, gam
   }
 }
 
+#' Summarize Portfolio Performance with Transaction Cost Adjusted Returns
+#'
+#' Extends \code{summary.performance2} by including transaction cost adjusted
+#' annualized returns and their associated information ratios.
+#'
+#' @param portfolio_object A `portfolioReturns` object.
+#' @param transaction_cost Numeric. Assumed transaction costs for turnover adjustment.
+#' @param gamma Numeric. Risk aversion parameter for Certainty Equivalent Return.
+#' @param test Logical. If `TRUE`, performs statistical tests for significance.
+#' @param print Logical. If `TRUE`, prints a formatted table of results.
+#'
+#' @return A data frame summarizing portfolio performance metrics and test results.
+#'
+#' @import PerformanceAnalytics tidyquant dplyr
+#'
+#' @export
+summary.performance3 <- function(portfolio_object, transaction_cost = 0.001, gamma = 3, test = FALSE, print = FALSE) {
+  portfolio_returns <- portfolio_object$portfolio_returns
+  actual_returns <- portfolio_object$actual_returns
+  weights <- portfolio_object$weights
+  benchmark_weights <- portfolio_object$benchmark_weights
+  benchmark_returns <- portfolio_object$benchmark_returns
+
+  if (is.null(benchmark_weights) || is.null(benchmark_returns)) {
+    benchmark_weights <- actual_returns %>%
+      group_by(date) %>%
+      mutate(benchmark_weight = 1 / n()) %>%
+      ungroup() |> select(-actual_return)
+    benchmark_returns <- actual_returns %>%
+      left_join(benchmark_weights, by = c("date", "stock_id")) %>%
+      group_by(date) %>%
+      summarize(benchmark_return = sum(actual_return * benchmark_weight, na.rm = TRUE), .groups = "drop")
+  }
+
+  portfolio_returns <- portfolio_returns %>%
+    left_join(benchmark_returns |> rename(benchmark = benchmark_return), by = "date")
+  weights <- weights %>%
+    left_join(benchmark_weights |> rename(benchmark = benchmark_weight), by = c("stock_id", "date"))
+
+  portfolio_xts <- timetk::tk_xts(portfolio_returns, silent = TRUE)
+  benchmark_xts <- timetk::tk_xts(benchmark_returns, silent = TRUE)
+  weights_xts <- timetk::tk_xts(weights, silent = TRUE)
+
+  results <- tibble()
+
+  for (portfolio_name in names(portfolio_xts)) {
+    portfolio_ret <- portfolio_xts[, portfolio_name]
+    benchmark_ret <- benchmark_xts[, 1]
+    weights_ext <- weights_xts[, portfolio_name]
+
+    annualized_mean <- PerformanceAnalytics::table.AnnualizedReturns(portfolio_ret, geometric = FALSE)[1, 1]
+    mean_pval <- if (test) {
+      t.test(coredata(portfolio_ret), mu = mean(coredata(benchmark_ret)), alternative = "greater")$p.value
+    } else {
+      NA
+    }
+
+    sharpe_ratio <- PerformanceAnalytics::table.AnnualizedReturns(portfolio_ret, geometric = FALSE)[3, 1]
+
+    turnover_data <- calculate_turnover(weights |> select(stock_id, date, weight = !!portfolio_name), actual_returns)
+    per_period_turnover <- turnover_data$per_period_turnover
+    total_turnover <- turnover_data$total_turnover
+
+    tc_returns <- portfolio_ret - (per_period_turnover * transaction_cost)
+    tc_annualized_mean <- PerformanceAnalytics::table.AnnualizedReturns(tc_returns, geometric = FALSE)[1, 1]
+    tc_mean_pval <- if (test) {
+      t.test(coredata(tc_returns), mu = mean(coredata(benchmark_ret)), alternative = "greater")$p.value
+    } else {
+      NA
+    }
+
+    tracking_error <- sd(portfolio_ret - benchmark_ret, na.rm = TRUE) * sqrt(12)
+    information_ratio <- mean(portfolio_ret - benchmark_ret, na.rm = TRUE) / tracking_error
+    ir_pval <- if (test) {
+      t.test(coredata(portfolio_ret - benchmark_ret), alternative = "greater")$p.value
+    } else {
+      NA
+    }
+
+    tc_tracking_error <- sd(tc_returns - benchmark_ret, na.rm = TRUE) * sqrt(12)
+    tc_information_ratio <- mean(tc_returns - benchmark_ret, na.rm = TRUE) / tc_tracking_error
+    tc_ir_pval <- if (test) {
+      t.test(coredata(tc_returns - benchmark_ret), alternative = "greater")$p.value
+    } else {
+      NA
+    }
+
+    cert_eq_return <- annualized_mean - (gamma / 2) * (sd(portfolio_ret, na.rm = TRUE) * sqrt(12))^2
+
+    results <- rbind(
+      results,
+      tibble(
+        Portfolio = portfolio_name,
+        `Annualized Mean` = round(annualized_mean, 4),
+        `Mean P-Value` = round(mean_pval, 4),
+        `TC Annualized Mean` = round(tc_annualized_mean, 4),
+        `TC Mean P-Value` = round(tc_mean_pval, 4),
+        `Sharpe Ratio` = round(sharpe_ratio, 4),
+        `Active Share` = round(calculate_active_share(weights |> select(stock_id, date, weight = !!portfolio_name), benchmark_weights), 4),
+        `Turnover` = round(total_turnover, 4),
+        `Information Ratio` = round(information_ratio, 4),
+        `IR P-Value` = round(ir_pval, 4),
+        `TC Information Ratio` = round(tc_information_ratio, 4),
+        `TC IR P-Value` = round(tc_ir_pval, 4),
+        CER = round(cert_eq_return, 4)
+      )
+    )
+  }
+
+  if (print) {
+    results_to_print <- results %>%
+      mutate(
+        `Annualized Mean` = ifelse(
+          !is.na(`Mean P-Value`),
+          paste0(round(`Annualized Mean`, 4),
+                 case_when(
+                   `Mean P-Value` <= 0.01 ~ "***",
+                   `Mean P-Value` <= 0.05 ~ "**",
+                   `Mean P-Value` <= 0.10 ~ "*",
+                   TRUE ~ ""
+                 )),
+          round(`Annualized Mean`, 4)
+        ),
+        `TC Annualized Mean` = ifelse(
+          !is.na(`TC Mean P-Value`),
+          paste0(round(`TC Annualized Mean`, 4),
+                 case_when(
+                   `TC Mean P-Value` <= 0.01 ~ "***",
+                   `TC Mean P-Value` <= 0.05 ~ "**",
+                   `TC Mean P-Value` <= 0.10 ~ "*",
+                   TRUE ~ ""
+                 )),
+          round(`TC Annualized Mean`, 4)
+        ),
+        `Information Ratio` = ifelse(
+          !is.na(`IR P-Value`),
+          paste0(round(`Information Ratio`, 4),
+                 case_when(
+                   `IR P-Value` <= 0.01 ~ "***",
+                   `IR P-Value` <= 0.05 ~ "**",
+                   `IR P-Value` <= 0.10 ~ "*",
+                   TRUE ~ ""
+                 )),
+          round(`Information Ratio`, 4)
+        ),
+        `TC Information Ratio` = ifelse(
+          !is.na(`TC IR P-Value`),
+          paste0(round(`TC Information Ratio`, 4),
+                 case_when(
+                   `TC IR P-Value` <= 0.01 ~ "***",
+                   `TC IR P-Value` <= 0.05 ~ "**",
+                   `TC IR P-Value` <= 0.10 ~ "*",
+                   TRUE ~ ""
+                 )),
+          round(`TC Information Ratio`, 4)
+        )
+      ) %>%
+      rename(!!paste0("CER (gamma=", gamma, ")") := CER) |>
+      select(-`Mean P-Value`, -`TC Mean P-Value`, -`IR P-Value`, -`TC IR P-Value`)
+
+    print(knitr::kable(
+      results_to_print,
+      digits = 4,
+      align = "c",
+      format = "markdown",
+      caption = "Portfolio Performance Summary"
+    ))
+    return(results_to_print)
+  } else {
+    return(results)
+  }
+}
+
 #' Summarize Portfolio Correlations
 #'
 #' Computes and optionally prints a correlation table between portfolio returns,
